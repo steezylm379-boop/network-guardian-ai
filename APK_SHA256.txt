@@ -1,0 +1,4 @@
+PRE-PATCH APK CHECKSUM ONLY (v1.1.0+2)
+80DEBA520E2F6AAFA1D772BC6F3DCBE1D8384BB5B3F9389C9814994F693E1C6C  build/app/outputs/flutter-apk/app-debug.apk
+
+The current source is v1.2.0+4 and must be rebuilt. Do not use the checksum above to validate a newly built v1.2.0+4 APK.

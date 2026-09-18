@@ -1,0 +1,1 @@
+Superseded by PHASE3_REBUILD_REQUIRED.txt. Run tool\verify_phase3.ps1 for the current v1.3.0+5 checkpoint.

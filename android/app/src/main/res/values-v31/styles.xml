@@ -1,0 +1,15 @@
+<resources>
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowSplashScreenBackground">#101214</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/guardian_icon</item>
+        <item name="android:windowBackground">#101214</item>
+        <item name="android:statusBarColor">#101214</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">#101214</item>
+        <item name="android:statusBarColor">#101214</item>
+        <item name="android:navigationBarColor">#101214</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

@@ -1,0 +1,3 @@
+Network Guardian AI v1.3.0+5 adds Drift schema v3 and Phase 3 Guardian AI source.
+Generated Drift code checked into this archive may still represent the previous schema until build_runner is executed.
+Run tool\verify_phase3.ps1 before judging this checkpoint as build-verified.

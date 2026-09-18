@@ -1,0 +1,37 @@
+name: network_guardian_ai
+description: Private, local-first LAN discovery and device intelligence for Android and iOS.
+publish_to: none
+version: 1.3.0+8
+environment:
+  sdk: '>=3.12.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^3.0.0
+  go_router: ^16.0.0
+  drift: ^2.30.0
+  sqlite3_flutter_libs: ^0.5.39
+  path_provider: ^2.1.5
+  path: ^1.9.1
+  uuid: ^4.5.1
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  drift_dev: ^2.30.0
+  build_runner: ^2.7.0
+  sqlite3: ^3.5.2
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/oui.json
+  fonts:
+    - family: GuardianSans
+      fonts:
+        - asset: assets/fonts/roboto-regular.ttf
+        - asset: assets/fonts/roboto-light.ttf
+          weight: 300
+        - asset: assets/fonts/roboto-medium.ttf
+          weight: 500
+        - asset: assets/fonts/roboto-bold.ttf
+          weight: 700
