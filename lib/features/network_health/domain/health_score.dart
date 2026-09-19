@@ -30,9 +30,10 @@ class NetworkHealthCalculator {
     required bool gatewayConfigured,
     required List<Device> devices,
   }) {
-    final online = devices.where((d) => d.isOnline).toList();
+    final validDevices = devices.where((d) => d.id.isNotEmpty).toList();
+    final online = validDevices.where((d) => d.isOnline).toList();
     final gatewayOnline = online.any((d) => d.isGateway);
-    final classified = devices.where((d) {
+    final classified = validDevices.where((d) {
       final c = d.fingerprint.classification;
       return c.category != DeviceCategory.unknown &&
           (c.level == ConfidenceLevel.high ||
@@ -45,33 +46,34 @@ class NetworkHealthCalculator {
         : gatewayOnline
         ? 100
         : 55;
-    final discovery = devices.isEmpty
+    final discovery = validDevices.isEmpty
         ? (hasNetwork ? 65 : 0)
         : online.isNotEmpty
         ? 100
         : 55;
-    final identity = devices.isEmpty
+    final identity = validDevices.isEmpty
         ? 50
-        : ((classified / devices.length) * 100).round().clamp(0, 100);
+        : ((classified / validDevices.length) * 100).round().clamp(0, 100);
 
-    // This is deliberately a transparent local-health score, not a security
-    // verdict. Security analysis is a later, separate feature.
-    final score = ((connectivity * .40) +
-            (gateway * .25) +
-            (discovery * .25) +
-            (identity * .10))
-        .round()
-        .clamp(0, 100);
+    // Deterministic weighted formula with strict clamping
+    final calculated = (connectivity * 0.40) +
+        (gateway * 0.25) +
+        (discovery * 0.25) +
+        (identity * 0.10);
+
+    final score = calculated.isNaN || calculated.isInfinite
+        ? 0
+        : calculated.round().clamp(0, 100);
 
     return NetworkHealthScore(score: score, components: [
       HealthComponent(
         'Connectivity',
-        connectivity,
+        connectivity.clamp(0, 100),
         hasNetwork ? 'Wi-Fi network detected.' : 'No Wi-Fi network detected.',
       ),
       HealthComponent(
         'Gateway',
-        gateway,
+        gateway.clamp(0, 100),
         gatewayOnline
             ? 'Gateway responded during discovery.'
             : gatewayConfigured
@@ -80,17 +82,17 @@ class NetworkHealthCalculator {
       ),
       HealthComponent(
         'Discovery',
-        discovery,
-        devices.isEmpty
+        discovery.clamp(0, 100),
+        validDevices.isEmpty
             ? 'No device observations yet.'
-            : '${online.length} of ${devices.length} recorded devices were seen online.',
+            : '${online.length} of ${validDevices.length} recorded devices were seen online.',
       ),
       HealthComponent(
         'Identification',
-        identity,
-        devices.isEmpty
+        identity.clamp(0, 100),
+        validDevices.isEmpty
             ? 'No devices to classify yet.'
-            : '$classified of ${devices.length} devices have high-confidence identities.',
+            : '$classified of ${validDevices.length} devices have high-confidence identities.',
       ),
     ]);
   }

@@ -26,11 +26,13 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
     private var sink: EventChannel.EventSink? = null
     private var active: ScanRun? = null
     private var permissionResult: MethodChannel.Result? = null
+
     init {
         EventChannel(messenger, "network_guardian/events").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink) { sink = events }
             override fun onCancel(arguments: Any?) { sink = null }
         })
+
         MethodChannel(messenger, "network_guardian/discovery").setMethodCallHandler { call, result ->
             try {
                 when (call.method) {
@@ -67,10 +69,13 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
             } catch (e: Exception) { result.error("network_unavailable", e.message ?: "Network operation unavailable", null) }
         }
     }
+
     fun permissions(code: Int, grants: IntArray) {
         if (code == 410) { permissionResult?.success(grants.isNotEmpty() && grants.all { it == PackageManager.PERMISSION_GRANTED }); permissionResult = null }
     }
+
     fun dispose() { active?.cancel(); coordinator.shutdownNow(); permissionResult?.success(false); permissionResult = null }
+
     private fun selectNetwork(): Network = cm.allNetworks.firstOrNull {
         val caps = cm.getNetworkCapabilities(it)
         caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
@@ -81,7 +86,6 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
         val link = lp.linkAddresses.firstOrNull { it.address is Inet4Address && !it.address.isLoopbackAddress }
             ?: error("This Wi-Fi network has no IPv4 address. IPv6-only discovery is not implemented in this build.")
         val wifi = cm.getNetworkCapabilities(network)?.transportInfo as? WifiInfo
-        // WifiManager supplies permission-gated identity on devices that redact transportInfo.
         @Suppress("DEPRECATION")
         val legacy = try { (activity.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager).connectionInfo } catch (_: SecurityException) { null }
         val ssid = (wifi?.ssid?.takeUnless { it == "<unknown ssid>" } ?: legacy?.ssid)
@@ -93,6 +97,7 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
             "interface" to (lp.interfaceName ?: error("Invalid Wi-Fi interface")), "ssid" to ssid, "bssid" to bssid,
             "token" to network.toString(), "boot" to android.provider.Settings.Global.getInt(activity.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0))
     }
+
     private fun emit(id: String, values: Map<String, Any?>) { handler.post { sink?.success(values + ("runId" to id)) } }
 
     private inner class ScanRun(val network: Network, val id: String) {
@@ -108,18 +113,32 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
         var callback: ConnectivityManager.NetworkCallback? = null
         var intelligence: DeviceIntelligenceDiscovery? = null
         var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
+
         fun event(values: Map<String, Any?>) { if (!stopped.get()) emit(id, values) }
+
         fun inRange(ip: String): Boolean = try { numeric(ip) in first..last } catch (_: Exception) { false }
+
+        @Synchronized
+        fun releaseMulticastLock() {
+            multicastLock?.let {
+                try {
+                    if (it.isHeld) it.release()
+                } catch (_: Exception) {}
+            }
+            multicastLock = null
+        }
+
         fun cancel() {
             stopped.set(true)
             intelligence?.cancel()
-            multicastLock?.let { try { if (it.isHeld) it.release() } catch (_: Exception) {} }
-            multicastLock = null
+            releaseMulticastLock()
             sockets.forEach { try { it.close() } catch (_: Exception) {} }
-            datagrams.forEach { it.close() }
-            pool.shutdownNow(); nsd.stop()
+            datagrams.forEach { try { it.close() } catch (_: Exception) {} }
+            pool.shutdownNow()
+            nsd.stop()
             callback?.let { try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {} }; callback = null
         }
+
         fun execute() {
             try {
                 if (stopped.get()) return
@@ -133,6 +152,7 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
                 check(last - first + 1 <= 4096) { "Subnet exceeds the 4,096-host scan limit" }
                 val iface = NetworkInterface.getByName(info["interface"] as String) ?: error("Wi-Fi interface disappeared")
                 val initial = "${info["ip"]}/${info["prefix"]}"
+
                 callback = object : ConnectivityManager.NetworkCallback() {
                     override fun onLost(n: Network) { if (n == network) fail("Wi-Fi disconnected. Partial results retained.") }
                     override fun onLinkPropertiesChanged(n: Network, lp: LinkProperties) {
@@ -140,7 +160,9 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
                     }
                 }
                 cm.registerNetworkCallback(NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), callback!!)
+
                 nsd.start()
+
                 val done = AtomicInteger(0)
                 val jobs = (first..last).map { address -> pool.submit {
                     if (!stopped.get()) {
@@ -153,40 +175,54 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
                 } }
                 jobs.forEach { if (!stopped.get()) it.get() }
                 if (stopped.get()) return
+
                 event(mapOf("kind" to "phase", "phase" to "resolving"))
                 ArpResolver().resolve(info["interface"] as String).let { entries ->
                     if (entries.isEmpty()) event(mapOf("kind" to "warning", "message" to "MAC/ARP information is unavailable or empty on this Android device."))
-                    // ARP caches may be stale: enrich positively discovered addresses only.
                     entries.filterKeys { it in found }.forEach { (ip, mac) ->
                         event(mapOf("kind" to "device", "ip" to ip, "mac" to mac, "source" to "ARP"))
                     }
                 }
+
                 nsd.awaitWindow()
+
                 val dns = cm.getLinkProperties(network)?.dnsServers?.firstOrNull { it is Inet4Address }
                 if (dns != null) found.toList().map { ip -> pool.submit {
                     if (!stopped.get()) HostnameResolver(network, dns, datagrams).resolve(ip)?.let {
                         event(mapOf("kind" to "device", "ip" to ip, "hostname" to it, "source" to "Reverse DNS"))
                     }
                 } }.forEach { if (!stopped.get()) it.get() }
+
                 if (!stopped.get()) {
                     event(mapOf("kind" to "phase", "phase" to "identifying"))
-                    val wifi = activity.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-                    multicastLock = wifi.createMulticastLock("guardian-ssdp").apply { setReferenceCounted(false); acquire() }
+                    val wifi = activity.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                    if (wifi != null) {
+                        try {
+                            multicastLock = wifi.createMulticastLock("guardian-ssdp-$id").apply {
+                                setReferenceCounted(false)
+                                acquire()
+                            }
+                        } catch (_: Exception) {}
+                    }
                     val discovery = DeviceIntelligenceDiscovery(network, iface, first, last, stopped, datagrams, sockets) { data ->
                         (data["ip"] as? String)?.let { found.add(it) }
                         event(data)
                     }
                     intelligence = discovery
-                    try { discovery.discover(); discovery.portHints(found.toList().sorted()) }
-                    finally {
+                    try {
+                        discovery.discover()
+                        discovery.portHints(found.toList().sorted())
+                    } finally {
                         discovery.cancel()
-                        multicastLock?.let { if (it.isHeld) it.release() }; multicastLock = null
+                        releaseMulticastLock()
                     }
                 }
+
                 if (!stopped.get()) emit(id, mapOf("kind" to "completed"))
             } catch (e: Exception) { if (!stopped.get()) emit(id, mapOf("kind" to "error", "message" to (e.message ?: "Discovery failed"))) }
             finally { cancel(); handler.post { if (active === this) active = null } }
         }
+
         fun fail(message: String) { if (!stopped.get()) { emit(id, mapOf("kind" to "error", "message" to message)); cancel() } }
     }
 
@@ -198,6 +234,7 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
         val closed = AtomicBoolean(false)
         val queuedServices = ConcurrentHashMap.newKeySet<String>()
         var deadline = 0L
+
         @Synchronized fun start() {
             if (closed.get() || stopped.get()) return
             deadline = SystemClock.elapsedRealtime() + 8000
@@ -210,7 +247,9 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
                     override fun onServiceLost(s: NsdServiceInfo) {}
                     override fun onServiceFound(s: NsdServiceInfo) {
                         if (closed.get() || stopped.get()) return
-                        if (queuedServices.size >= 128 || !queuedServices.add("${s.serviceType}:${s.serviceName}")) return
+                        val name = s.serviceName ?: return
+                        val typeStr = s.serviceType ?: return
+                        if (queuedServices.size >= 128 || !queuedServices.add("$typeStr:$name")) return
                         try { resolver.execute { resolve(s) } } catch (_: RejectedExecutionException) {}
                     }
                 }
@@ -220,48 +259,86 @@ class DiscoveryBridge(private val activity: FlutterActivity, messenger: io.flutt
                 } catch (_: Exception) { emit(id, mapOf("kind" to "warning", "message" to "Android could not start mDNS for $type")) }
             }
         }
+
         @Suppress("DEPRECATION")
         fun resolve(service: NsdServiceInfo) {
             if (closed.get() || stopped.get()) return
+            val sName = service.serviceName?.takeIf { it.isNotBlank() && it.length <= 256 } ?: return
+            val sType = service.serviceType?.takeIf { it.isNotBlank() && it.length <= 256 } ?: return
+
             val latch = CountDownLatch(1)
-            val expired = AtomicBoolean(false)
+            val resolved = AtomicBoolean(false)
             val listener = object : NsdManager.ResolveListener {
                 override fun onResolveFailed(s: NsdServiceInfo, code: Int) { latch.countDown() }
                 override fun onServiceResolved(s: NsdServiceInfo) {
-                    if (!closed.get() && !stopped.get() && !expired.get()) {
+                    if (!closed.get() && !stopped.get() && resolved.compareAndSet(false, true)) {
                         val host = s.host
-                        if (host is Inet4Address) discovered(host.hostAddress!!, mapOf("mdns" to s.serviceName,
-                            "service" to mapOf("name" to s.serviceName, "type" to s.serviceType, "port" to s.port,
-                                "attributes" to s.attributes.mapValues { android.util.Base64.encodeToString(it.value, android.util.Base64.NO_WRAP) })))
+                        val port = s.port
+                        if (host is Inet4Address && port in 1..65535) {
+                            val cleanName = s.serviceName?.take(256) ?: sName
+                            val cleanType = s.serviceType?.take(256) ?: sType
+                            val safeAttrs = try {
+                                s.attributes.entries.take(32).mapNotNull { (k, v) ->
+                                    if (k.isNotBlank() && k.length <= 128 && v != null && v.size <= 1024) {
+                                        k to android.util.Base64.encodeToString(v, android.util.Base64.NO_WRAP)
+                                    } else null
+                                }.toMap()
+                            } catch (_: Exception) { emptyMap() }
+
+                            discovered(host.hostAddress!!, mapOf(
+                                "mdns" to cleanName,
+                                "service" to mapOf(
+                                    "name" to cleanName,
+                                    "type" to cleanType,
+                                    "port" to port,
+                                    "attributes" to safeAttrs
+                                )
+                            ))
+                        }
                     }
                     latch.countDown()
                 }
             }
+
             try {
                 manager.resolveService(service, listener)
-                latch.await(1500, TimeUnit.MILLISECONDS)
-            } catch (_: Exception) {} finally {
-                expired.set(true)
+                // Watchdog: bound maximum time for resolve listener to 2000ms
+                val completed = latch.await(2000, TimeUnit.MILLISECONDS)
+                if (!completed) {
+                    resolved.set(false)
+                }
+            } catch (_: Exception) {}
+            finally {
                 if (Build.VERSION.SDK_INT >= 34) try { manager.stopServiceResolution(listener) } catch (_: Exception) {}
             }
         }
+
         fun awaitWindow() {
             while (!stopped.get() && SystemClock.elapsedRealtime() < deadline) Thread.sleep(100)
-            listeners.forEach { try { manager.stopServiceDiscovery(it) } catch (_: Exception) {} }; listeners.clear()
-            resolver.shutdown(); resolver.awaitTermination(4, TimeUnit.SECONDS)
+            stopListeners()
+            resolver.shutdown()
+            try { resolver.awaitTermination(3, TimeUnit.SECONDS) } catch (_: Exception) {}
             stop()
         }
+
+        private fun stopListeners() {
+            listeners.forEach { try { manager.stopServiceDiscovery(it) } catch (_: Exception) {} }
+            listeners.clear()
+        }
+
         @Synchronized fun stop() {
             if (!closed.compareAndSet(false, true)) return
-            listeners.forEach { try { manager.stopServiceDiscovery(it) } catch (_: Exception) {} }; listeners.clear()
+            stopListeners()
             resolver.shutdownNow()
         }
     }
+
     companion object {
         fun numeric(ip: String): Long {
             val parts = ip.split('.'); require(parts.size == 4)
             return parts.fold(0L) { result, part -> val v = part.toInt(); require(v in 0..255); (result shl 8) or v.toLong() }
         }
+
         fun format(n: Long): String = listOf(24, 16, 8, 0).joinToString(".") { ((n shr it) and 255).toString() }
     }
 }
@@ -280,8 +357,6 @@ internal class ReachabilityScanner(val network: Network, val iface: NetworkInter
                 socket.connect(InetSocketAddress(address, port), 350)
                 return true
             } catch (e: Exception) {
-                // A refused connection is a positive host response. Timeouts and
-                // no-route/permission errors are not evidence of a device.
                 var cause: Throwable? = e
                 while (cause != null) {
                     if (cause is ErrnoException && cause.errno == OsConstants.ECONNREFUSED) return true
@@ -292,6 +367,7 @@ internal class ReachabilityScanner(val network: Network, val iface: NetworkInter
         return false
     }
 }
+
 internal class ArpResolver {
     fun resolve(iface: String): Map<String, String> = try {
         File("/proc/net/arp").readLines().drop(1).mapNotNull { line ->
@@ -318,6 +394,7 @@ internal class HostnameResolver(val network: Network, val dns: InetAddress, val 
             parsePtr(packet.data.copyOf(packet.length), id)
         } catch (_: Exception) { null } finally { sockets.remove(socket); socket.close() }
     }
+
     companion object {
         fun parsePtr(bytes: ByteArray, id: Int): String? {
             fun u16(p: Int): Int { require(p + 1 < bytes.size); return ((bytes[p].toInt() and 255) shl 8) or (bytes[p + 1].toInt() and 255) }

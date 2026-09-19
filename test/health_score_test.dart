@@ -28,5 +28,20 @@ void main() {
       devices: const [],
     );
     expect(score.score, lessThan(50));
+    expect(score.label, 'Needs attention');
+  });
+
+  test('handles multiple devices and online states deterministically', () {
+    final d1 = Device(networkId: 'n', ipAddress: '192.168.1.1', isGateway: true, isOnline: true);
+    final d2 = Device(networkId: 'n', ipAddress: '192.168.1.100', isGateway: false, isOnline: false);
+    final score = const NetworkHealthCalculator().evaluate(
+      hasNetwork: true,
+      gatewayConfigured: true,
+      devices: [d1, d2],
+    );
+    expect(score.score, inInclusiveRange(0, 100));
+    for (final c in score.components) {
+      expect(c.score, inInclusiveRange(0, 100));
+    }
   });
 }

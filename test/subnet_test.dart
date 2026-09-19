@@ -10,14 +10,30 @@ void main() {
     expect(s.hosts.last, '192.168.3.254');
     expect(Ipv4Subnet('10.20.31.5', 20).cidr, '10.20.16.0/20');
   });
+
   test('point-to-point and host routes retain valid hosts', () {
     expect(Ipv4Subnet('10.0.0.0', 31).hosts.toList(), ['10.0.0.0', '10.0.0.1']);
     expect(Ipv4Subnet('10.0.0.7', 32).hosts.toList(), ['10.0.0.7']);
     expect(Ipv4Subnet('10.0.0.7', 0).count, 4294967294);
   });
+
   test('invalid addresses and prefixes fail clearly', () {
     expect(() => Ipv4Subnet('10.0.0.256', 24), throwsFormatException);
     expect(() => Ipv4Subnet('10.0.0.1', 33), throwsFormatException);
+    expect(() => Ipv4Subnet('10.0.0.1', -1), throwsFormatException);
     expect(() => Ipv4Subnet('::1', 24), throwsFormatException);
+    expect(() => Ipv4Subnet('10.0.0.1.5', 24), throwsFormatException);
+    expect(() => Ipv4Subnet('10.0..1', 24), throwsFormatException);
+    expect(() => Ipv4Subnet('10.0.0.-1', 24), throwsFormatException);
+    expect(() => Ipv4Subnet('abc.def.ghi.jkl', 24), throwsFormatException);
+  });
+
+  test('subnet membership checks handle valid and invalid queries safely', () {
+    final subnet = Ipv4Subnet('192.168.1.50', 24);
+    expect(subnet.contains('192.168.1.1'), isTrue);
+    expect(subnet.contains('192.168.1.254'), isTrue);
+    expect(subnet.contains('192.168.2.1'), isFalse);
+    expect(subnet.contains('invalid-ip'), isFalse);
+    expect(subnet.contains('999.999.999.999'), isFalse);
   });
 }

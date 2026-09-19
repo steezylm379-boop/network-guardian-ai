@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import '../../privacy/redactor.dart';
 import 'guardian_models.dart';
 
 /// Contract for an enterprise AI gateway. The mobile app must never ship a
@@ -21,16 +23,22 @@ class AiPrivacyPolicy {
     this.includeRawIp = false,
     this.includeRawMac = false,
     this.includeFriendlyNames = false,
+    this.pseudonymizeIdentifiers = false,
   });
+
   final bool includeNetworkName;
   final bool includeRawIp;
   final bool includeRawMac;
   final bool includeFriendlyNames;
+  final bool pseudonymizeIdentifiers;
 
   Map<String, dynamic> sanitize(NetworkSnapshot snapshot) {
+    final redactor = PrivacyRedactor();
     return {
       'network': {
-        'name': includeNetworkName ? snapshot.networkName : null,
+        'name': includeNetworkName
+            ? snapshot.networkName
+            : (pseudonymizeIdentifiers ? redactor.redactSsid(snapshot.networkName) : null),
         'cidr': includeRawIp ? snapshot.cidr : null,
         'deviceCount': snapshot.devices.length,
         'onlineCount': snapshot.onlineCount,
@@ -41,9 +49,17 @@ class AiPrivacyPolicy {
         for (var i = 0; i < snapshot.devices.length; i++)
           {
             'id': 'device_${i + 1}',
-            'displayName': includeFriendlyNames ? snapshot.devices[i].fingerprint.override?.userName : null,
-            'ip': includeRawIp ? snapshot.devices[i].ipAddress : null,
-            'mac': includeRawMac ? snapshot.devices[i].macAddress : null,
+            'displayName': includeFriendlyNames
+                ? snapshot.devices[i].fingerprint.override?.userName
+                : null,
+            'ip': includeRawIp
+                ? snapshot.devices[i].ipAddress
+                : (pseudonymizeIdentifiers ? redactor.redactIp(snapshot.devices[i].ipAddress) : null),
+            'mac': includeRawMac
+                ? snapshot.devices[i].macAddress
+                : (pseudonymizeIdentifiers && snapshot.devices[i].macAddress != null
+                    ? redactor.redactMac(snapshot.devices[i].macAddress!)
+                    : null),
             'category': snapshot.devices[i].fingerprint.classification.category.name,
             'manufacturer': snapshot.devices[i].fingerprint.classification.manufacturer,
             'model': snapshot.devices[i].fingerprint.classification.model,
@@ -91,13 +107,17 @@ class HttpEnterpriseAiGateway implements EnterpriseAiGateway {
     if (token == null || token.trim().isEmpty) {
       throw StateError('Enterprise AI gateway authentication is unavailable.');
     }
+
+    final redactor = PrivacyRedactor();
+    final sanitizedQuestion = redactor.redactText(question);
+
     final request = await _client.postUrl(endpoint).timeout(const Duration(seconds: 8));
     request.followRedirects = false;
     request.headers.contentType = ContentType.json;
     request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
     request.headers.set('X-Guardian-Protocol', 'phase3-v1');
     request.write(jsonEncode({
-      'question': question,
+      'question': sanitizedQuestion,
       'context': privacy.sanitize(snapshot),
       'doctor': doctor?.toJson(),
       'policy': {
@@ -106,21 +126,25 @@ class HttpEnterpriseAiGateway implements EnterpriseAiGateway {
         'returnEvidence': true,
       },
     }));
+
     final response = await request.close().timeout(const Duration(seconds: 12));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       await response.drain<void>();
       throw HttpException('Enterprise AI gateway returned HTTP ${response.statusCode}.');
     }
+
     final body = await utf8.decoder.bind(response).join();
     final json = jsonDecode(body);
     if (json is! Map) throw const FormatException('Invalid AI gateway response.');
     final map = Map<String, dynamic>.from(json);
     final text = map['answer']?.toString().trim();
     if (text == null || text.isEmpty) throw const FormatException('AI gateway returned no answer.');
+
     final evidence = (map['evidence'] as List? ?? const [])
         .whereType<Map>()
         .map((e) => GuardianEvidence.fromJson(Map<String, dynamic>.from(e)))
         .toList();
+
     return GuardianAnswer(
       text: text,
       confidence: ((map['confidence'] as num?)?.toInt() ?? 70).clamp(0, 100).toInt(),

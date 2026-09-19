@@ -13,7 +13,14 @@ internal class LanDescriptionClient(
     private val open: (URI) -> HttpURLConnection
 ) {
     private val connections = ConcurrentHashMap.newKeySet<HttpURLConnection>()
-    fun cancel() { connections.forEach { it.disconnect() } }
+
+    fun cancel() {
+        connections.forEach {
+            try { it.disconnect() } catch (_: Exception) {}
+        }
+        connections.clear()
+    }
+
     fun fetch(uri: URI, deadline: Long): Map<String, Any>? {
         var connection: HttpURLConnection? = null
         return try {
@@ -21,11 +28,25 @@ internal class LanDescriptionClient(
             connection = open(uri)
             connections.add(connection)
             if (stopped.get()) return null
+
             connection.instanceFollowRedirects = false
-            connection.connectTimeout = 800; connection.readTimeout = 800
+            connection.connectTimeout = 800
+            connection.readTimeout = 800
             connection.useCaches = false
             connection.setRequestProperty("Accept", "text/xml, application/xml")
-            if (connection.responseCode != 200 || connection.contentLengthLong > IntelligenceParsers.MAX_XML) return null
+            connection.setRequestProperty("User-Agent", "NetworkGuardian/1.3")
+
+            val responseCode = connection.responseCode
+            if (responseCode != 200) return null
+
+            val length = connection.contentLengthLong
+            if (length > IntelligenceParsers.MAX_XML) return null
+
+            val contentType = connection.contentType?.lowercase() ?: ""
+            if (contentType.isNotEmpty() && !contentType.contains("xml") && !contentType.contains("text/plain")) {
+                return null
+            }
+
             val out = ByteArrayOutputStream()
             connection.inputStream.use { input ->
                 val buffer = ByteArray(4096)
@@ -37,7 +58,13 @@ internal class LanDescriptionClient(
                 }
             }
             null
-        } catch (_: Exception) { null }
-        finally { connection?.let { connections.remove(it); it.disconnect() } }
+        } catch (_: Exception) {
+            null
+        } finally {
+            connection?.let {
+                connections.remove(it)
+                try { it.disconnect() } catch (_: Exception) {}
+            }
+        }
     }
 }
