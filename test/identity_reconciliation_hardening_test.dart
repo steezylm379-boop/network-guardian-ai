@@ -2,7 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:network_guardian_ai/features/devices/domain/device.dart';
 import 'package:network_guardian_ai/features/intelligence/domain/classifier.dart';
 import 'package:network_guardian_ai/features/intelligence/domain/evidence_collector.dart';
-import 'package:network_guardian_ai/features/intelligence/domain/identity.dart';
 import 'package:network_guardian_ai/features/intelligence/domain/identity_reconciler.dart';
 
 void main() {

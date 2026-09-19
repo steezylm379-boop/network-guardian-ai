@@ -66,6 +66,8 @@ void main() {
       final snapshot = NetworkSnapshot(
         networkId: 'net_1',
         networkName: 'SecretHQ_Wifi',
+        gateway: '192.168.1.1',
+        localIp: '192.168.1.42',
         cidr: '192.168.1.0/24',
         devices: [device],
         lastCompletedScan: DateTime.now(),
